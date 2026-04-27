@@ -1,0 +1,25 @@
+# 1. 虚拟环境 (绝对不能传，换个机器要重新装)
+venv_linux/
+
+# 2. 环境变量与机密信息 (防 API Key 泄露)
+.env
+
+# 3. 数据库运行时文件
+*.db
+*.db-shm
+*.db-wal
+
+# 4. Agent 运行时生成的临时目录与沙箱垃圾
+.agent_sessions/
+.sandbox_base/
+.sandbox_overlays/
+.task_outputs/
+.tasks/
+.team/
+.transcripts/
+agent_workspace/
+workspace_sync/
+
+# 5. Python 缓存
+__pycache__/
+*.py[cod]
