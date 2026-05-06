@@ -48,9 +48,10 @@ def _format_size(size: int) -> str:
 def _preview_slice(text: str, limit: int) -> tuple[str, bool]:
     if len(text) <= limit:
         return text, False
-    idx = text[:limit].rfind("\n")
-    cut = idx if idx > (limit * 0.5) else limit
-    return text[:cut], True
+    head_limit = int(limit * 0.25)
+    tail_limit = limit - head_limit
+    preview = text[:head_limit] + "\n\n... [中间内容已截断] ...\n\n" + text[-tail_limit:]
+    return preview, True
 
 def _build_persisted_marker(stored_path: Path, content: str) -> str:
     preview, has_more = _preview_slice(content, PERSISTED_PREVIEW_CHARS)
@@ -58,7 +59,7 @@ def _build_persisted_marker(stored_path: Path, content: str) -> str:
         f"{PERSISTED_OPEN}\n"
         f"Output too large ({_format_size(len(content))}). "
         f"Full output saved to: {stored_path}\n\n"
-        f"Preview (first {_format_size(PERSISTED_PREVIEW_CHARS)}):\n"
+        f"Preview (limit {_format_size(PERSISTED_PREVIEW_CHARS)}):\n"
         f"{preview}"
     )
     if has_more:
@@ -78,7 +79,6 @@ def maybe_persist_output(tool_use_id: str, output: str, trigger_chars: int = Non
 # === SECTION: 沙箱管理器 (含心跳与状态机) ===
 class SandboxManager:
     def __init__(self):
-        self.lock = threading.RLock() # 可重入锁，防死锁
         self.db_path = WORKDIR / ".sandbox_meta.db"
         self.active_instances = {}  # 维护沙箱实例状态机的内存池
         self._init_db()
@@ -107,9 +107,8 @@ class SandboxManager:
 
     def _mark_status(self, sid: str, status: str):
         """状态机流转"""
-        with self.lock:
-            if sid in self.active_instances:
-                self.active_instances[sid]["status"] = status
+        if sid in self.active_instances:
+            self.active_instances[sid]["status"] = status
         try:
             conn = sqlite3.connect(self.db_path, timeout=5.0)
             conn.execute("UPDATE sandboxes SET status = ?, last_heartbeat = ? WHERE id = ?", 
@@ -123,8 +122,7 @@ class SandboxManager:
         """面试核心亮点：双链路心跳保活与分级资源限流"""
         while True:
             time.sleep(0.5)  # 每 500ms 探测一次
-            with self.lock:
-                instances = list(self.active_instances.items())
+            instances = list(self.active_instances.items())
             
             current_time = time.time()
             for sid, instance in instances:
@@ -133,7 +131,12 @@ class SandboxManager:
                 
                 try:
                     # 1. 尝试获取底层进程的心跳指标
-                    proc = psutil.Process(instance["pid"])
+                    # [核心修复]：不再每次重新实例化 Process，而是直接复用内存池里的缓存对象
+                    proc = instance.get("proc_obj")
+                    if not proc:
+                        continue
+
+                    # 因为复用了对象，所以能在 500ms 间隔内准确计算出这段时间的时间片消耗
                     cpu_usage = proc.cpu_percent()
                     mem_usage = proc.memory_percent()
                     
@@ -183,7 +186,7 @@ class SandboxManager:
                 "--ro-bind-try", "/etc", "/etc",
                 "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
                 "--bind", str(proj_root), str(proj_root), 
-                "--chdir", str(proj_root),                 
+                "--chdir", str(proj_root),                
                 "--setenv", "HOME", str(proj_root),
                 "bash", "-c", command
             ]
@@ -197,14 +200,21 @@ class SandboxManager:
                 cwd=proj_root
             )
 
-            # 注册到状态机池，标记为 working
-            with self.lock:
-                self.active_instances[sid] = {
-                    "session_id": session_id,
-                    "pid": process.pid,
-                    "status": "working",
-                    "last_heartbeat": time.time()
-                }
+            # [核心修复]：创建进程后，立刻实例化 psutil.Process 并调用一次，建立时间片基准
+            try:
+                proc_obj = psutil.Process(process.pid)
+                proc_obj.cpu_percent()  # 建立第一次调用的基准点
+            except psutil.NoSuchProcess:
+                proc_obj = None
+
+            # 注册到状态机池，标记为 working，并将进程对象塞入缓存
+            self.active_instances[sid] = {
+                "session_id": session_id,
+                "pid": process.pid,
+                "proc_obj": proc_obj,  # [核心修复]：缓存对象供心跳线程复用
+                "status": "working",
+                "last_heartbeat": time.time()
+            }
             
             try:
                 # 初始化 SQLite 记录
@@ -252,9 +262,9 @@ class SandboxManager:
             return f"Sandbox Exception: {str(e)}"
         finally:
             # 清理内存池
-            with self.lock:
-                if sid in self.active_instances:
-                    del self.active_instances[sid]
+            if sid in self.active_instances:
+                del self.active_instances[sid]
+                    
 SANDBOX = SandboxManager()
 
 def run_bash(command: str, tool_use_id: str = "") -> str:
