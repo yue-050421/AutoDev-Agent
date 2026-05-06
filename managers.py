@@ -207,15 +207,26 @@ class MessageBus:
     def send(self, sender: str, to: str, content: str, msg_type: str = "message", extra: dict = None) -> str:
         msg = {"type": msg_type, "from": sender, "content": content, "timestamp": time.time()}
         if extra: msg.update(extra)
-        with open(INBOX_DIR / f"{to}.jsonl", "a") as f:
-            f.write(json.dumps(msg) + "\n")
+        
+        agent_dir = INBOX_DIR / to
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_name = f"{sender}_{time.time()}.json"
+        with open(agent_dir / file_name, "w") as f:
+            f.write(json.dumps(msg))
+            
         return f"Sent {msg_type} to {to}"
 
     def read_inbox(self, name: str) -> list:
-        path = INBOX_DIR / f"{name}.jsonl"
-        if not path.exists(): return []
-        msgs = [json.loads(l) for l in path.read_text().strip().splitlines() if l]
-        path.write_text("")
+        agent_dir = INBOX_DIR / name
+        if not agent_dir.exists(): return []
+        msgs = []
+        for path in sorted(agent_dir.glob("*.json")):
+            try:
+                msgs.append(json.loads(path.read_text()))
+                path.unlink()
+            except Exception:
+                pass
         return msgs
 
     def broadcast(self, sender: str, content: str, names: list) -> str:
