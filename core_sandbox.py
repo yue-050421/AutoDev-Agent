@@ -23,8 +23,8 @@ from config import (
 )
 
 # 沙箱特有的资源限制配置（直接在这里定义，不依赖 config.py）
-COMMAND_TIMEOUT_SECONDS = 120
-MAX_OUTPUT_BYTES = 10 * 1024 * 1024
+COMMAND_TIMEOUT_SECONDS = 120#任何命令最多跑120s
+MAX_OUTPUT_BYTES = 10 * 1024 * 1024#标准输出最多为10MB
 
 # 确保核心物理目录存在
 WORKDIR.mkdir(parents=True, exist_ok=True)
@@ -32,6 +32,7 @@ TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # === SECTION: 大输出拦截与硬盘持久化 ===
 def _persist_tool_result(tool_use_id: str, content: str) -> Path:
+    #将工具调用的结果持久化到固定目录下的文本文件中
     safe_id = re.sub(r"[^a-zA-Z0-9_.-]", "_", tool_use_id or "unknown")
     path = TOOL_RESULTS_DIR / f"{safe_id}.txt"
     if not path.exists():
@@ -39,6 +40,7 @@ def _persist_tool_result(tool_use_id: str, content: str) -> Path:
     return path.relative_to(WORKDIR)
 
 def _format_size(size: int) -> str:
+#将一个整数转换成人类可读的带单位字符串
     if size < 1024:
         return f"{size}B"
     if size < 1024 * 1024:
@@ -46,6 +48,7 @@ def _format_size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f}MB"
 
 def _preview_slice(text: str, limit: int) -> tuple[str, bool]:
+    #生成长文本的智能预览
     if len(text) <= limit:
         return text, False
     head_limit = int(limit * 0.25)
@@ -54,6 +57,7 @@ def _preview_slice(text: str, limit: int) -> tuple[str, bool]:
     return preview, True
 
 def _build_persisted_marker(stored_path: Path, content: str) -> str:
+    #生成摘要标记给大语言模型
     preview, has_more = _preview_slice(content, PERSISTED_PREVIEW_CHARS)
     marker = (
         f"{PERSISTED_OPEN}\n"
@@ -68,6 +72,7 @@ def _build_persisted_marker(stored_path: Path, content: str) -> str:
     return marker
 
 def maybe_persist_output(tool_use_id: str, output: str, trigger_chars: int = None) -> str:
+    #根据输出大小决定是否将完整结果写入磁盘
     if not isinstance(output, str):
         return str(output)
     trigger = PERSIST_OUTPUT_TRIGGER_CHARS_DEFAULT if trigger_chars is None else int(trigger_chars)
@@ -84,13 +89,13 @@ class SandboxManager:
         self._init_db()
         
         # 启动后台守护线程，执行 500ms 双链路心跳检测
-        self.monitor_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self.monitor_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)#线程启动后将执行实例的_heartbeat_loop方法
         self.monitor_thread.start()
 
-    def _init_db(self):
+    def _init_db(self):#初始化沙箱管理的数据库
         conn = sqlite3.connect(self.db_path, timeout=5.0)
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA journal_mode=WAL")##日志模式设置为WAL
             # 建立完整的沙箱生命周期表
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS sandboxes (
@@ -105,8 +110,8 @@ class SandboxManager:
         finally:
             conn.close()
 
-    def _mark_status(self, sid: str, status: str):
-        """状态机流转"""
+    def _mark_status(self, sid: str, status: str):#sid:沙箱ID,status:要设置的新状态
+        """状态机流转"""#更新沙箱状态
         if sid in self.active_instances:
             self.active_instances[sid]["status"] = status
         try:
@@ -119,19 +124,19 @@ class SandboxManager:
             pass
 
     def _heartbeat_loop(self):
-        """面试核心亮点：双链路心跳保活与分级资源限流"""
+        """双链路心跳保活与分级资源限流"""
         while True:
             time.sleep(0.5)  # 每 500ms 探测一次
-            instances = list(self.active_instances.items())
+            instances = list(self.active_instances.items())#获取self.active_instances字典的当前快照
             
-            current_time = time.time()
+            current_time = time.time()#记录当前时间戳
             for sid, instance in instances:
                 if instance["status"] != "working":
                     continue
                 
                 try:
                     # 1. 尝试获取底层进程的心跳指标
-                    # [核心修复]：不再每次重新实例化 Process，而是直接复用内存池里的缓存对象
+                    # 不再每次重新实例化 Process，而是直接复用内存池里的缓存对象
                     proc = instance.get("proc_obj")
                     if not proc:
                         continue
@@ -166,7 +171,6 @@ class SandboxManager:
             resource.setrlimit(resource.RLIMIT_CPU, (COMMAND_TIMEOUT_SECONDS, COMMAND_TIMEOUT_SECONDS))
             resource.setrlimit(resource.RLIMIT_AS, (2 * 1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024))
             resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES))
-            ##resource.setrlimit(resource.RLIMIT_NPROC, (100, 100))
         except Exception:
             pass
 
@@ -175,7 +179,7 @@ class SandboxManager:
         sid = f"sbx_{uuid.uuid4().hex[:8]}"
         
         try:
-            proj_root = Path(project_path).resolve()
+            proj_root = Path(project_path).resolve()#解析为绝对路径
             
             bwrap_cmd = [
                 "bwrap",
@@ -211,7 +215,7 @@ class SandboxManager:
             self.active_instances[sid] = {
                 "session_id": session_id,
                 "pid": process.pid,
-                "proc_obj": proc_obj,  # [核心修复]：缓存对象供心跳线程复用
+                "proc_obj": proc_obj,  # 缓存对象供心跳线程复用
                 "status": "working",
                 "last_heartbeat": time.time()
             }
@@ -276,7 +280,7 @@ def _resolve_target_path(p: str) -> Path:
     base_workdir = WORKDIR.resolve()
     raw_path = Path(p)
 
-    # 核心修正：取消会话隔离层，直接解析到物理层 WORKDIR
+    # 取消会话隔离层，直接解析到物理层 WORKDIR
     if raw_path.is_absolute():
         target = raw_path.resolve()
     else:
