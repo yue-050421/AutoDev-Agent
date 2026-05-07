@@ -199,8 +199,6 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"task_id": {"type": "integer"}}, "required": ["task_id"]}},
 ]
 
-
-# === Agent主循环 ===
 # === Agent主循环 ===
 def agent_loop(messages: list):
     rounds_without_todo = 0
@@ -210,7 +208,7 @@ def agent_loop(messages: list):
             print("[auto-compact triggered]")
             messages[:] = auto_compact(messages)
 
-        # 🌟 核心修复：将后台通知和邮件，无缝追加到当前最后一个 User 消息的内容中
+        # 将后台通知和邮件，无缝追加到当前最后一个 User 消息的内容中
         # 绝不强行插入假的 Assistant 消息打乱 API 的 tool_result 校验链条
         def _inject_notice(notice_text: str):
             if not messages:
@@ -236,7 +234,6 @@ def agent_loop(messages: list):
         if inbox:
             _inject_notice(f"<inbox>{json.dumps(inbox, indent=2)}</inbox>")
 
-        # 下方调用大模型的代码保持不变...
         response = client.messages.create(
             model=MODEL, system=SYSTEM, messages=messages,
             tools=TOOLS, max_tokens=8000,
@@ -275,7 +272,6 @@ def agent_loop(messages: list):
 
         rounds_without_todo = 0 if used_todo else rounds_without_todo + 1
         if TODO.has_open_items() and rounds_without_todo >= 3:
-            # 🌟 修复：从 insert(0) 改成 append，绝不去挤占 tool_result 的首位
             results.append({"type": "text", "text": "<reminder>Update your todos.</reminder>"})
         messages.append({"role": "user", "content": results})
 
@@ -283,7 +279,6 @@ def agent_loop(messages: list):
             print("[manual compact]")
             messages[:] = auto_compact(messages, focus=compact_focus)
 
-# === REPL 控制台 ===
 if __name__ == "__main__":
     history = []
     while True:
