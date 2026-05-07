@@ -18,6 +18,7 @@ class TodoManager:
     def __init__(self):
         self.items = []
 
+    #接收待办事项列表
     def update(self, items: list) -> str:
         validated, ip = [], 0
         for i, item in enumerate(items):
@@ -34,7 +35,8 @@ class TodoManager:
         if ip > 1: raise ValueError("Only one in_progress allowed")
         self.items = validated
         return self.render()
-
+    
+    #返回待办事项列表的格式化字符串
     def render(self) -> str:
         if not self.items: return "No todos."
         lines = []
@@ -49,6 +51,7 @@ class TodoManager:
     def has_open_items(self) -> bool:
         return any(item.get("status") != "completed" for item in self.items)
 
+#创建临时代理
 def run_subagent(prompt: str, agent_type: str = "Explore") -> str:
     sub_tools = [
         {"name": "bash", "description": "Run command.", "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
@@ -81,6 +84,7 @@ def run_subagent(prompt: str, agent_type: str = "Explore") -> str:
         return "".join(b.text for b in resp.content if hasattr(b, "text")) or "(no summary)"
     return "(subagent failed)"
 
+#用于从指定目录中加载符合特定格式的技能文件
 class SkillLoader:
     def __init__(self, skills_dir: Path):
         self.skills = {}
@@ -107,6 +111,7 @@ class SkillLoader:
         if not s: return f"Error: Unknown skill '{name}'. Available: {', '.join(self.skills.keys())}"
         return f"<skill name=\"{name}\">\n{s['body']}\n</skill>"
 
+#管理任务的生命周期
 class TaskManager:
     def __init__(self):
         TASKS_DIR.mkdir(exist_ok=True)
@@ -161,6 +166,7 @@ class TaskManager:
             lines.append(f"{m} #{t['id']}: {t['subject']}{owner}{blocked}")
         return "\n".join(lines)
 
+    #加载指定任务
     def claim(self, tid: int, owner: str) -> str:
         task = self._load(tid)
         task["owner"] = owner
@@ -168,6 +174,7 @@ class TaskManager:
         self._save(task)
         return f"Claimed task #{tid} for {owner}"
 
+#异步执行长时间命令
 class BackgroundManager:
     def __init__(self):
         self.tasks = {}
@@ -200,6 +207,8 @@ class BackgroundManager:
             notifs.append(self.notifications.get_nowait())
         return notifs
 
+
+#多Agent异步通信
 class MessageBus:
     def __init__(self):
         INBOX_DIR.mkdir(parents=True, exist_ok=True)
@@ -237,6 +246,7 @@ class MessageBus:
                 count += 1
         return f"Broadcast to {count} teammates"
 
+#管理多个长期运行的Agent线程
 class TeammateManager:
     def __init__(self, bus: MessageBus, task_mgr: TaskManager):
         TEAM_DIR.mkdir(exist_ok=True)
@@ -259,6 +269,7 @@ class TeammateManager:
             if m["name"] == name: return m
         return None
 
+    #创建一个新的队友Agent
     def spawn(self, name: str, role: str, prompt: str) -> str:
         member = self._find(name)
         if member:
