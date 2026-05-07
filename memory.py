@@ -8,6 +8,7 @@ from config import client, MODEL, TRANSCRIPT_DIR, KEEP_RECENT, PRESERVE_RESULT_T
 def estimate_tokens(messages: list) -> int:
     return len(json.dumps(messages, default=str)) // 4
 
+#浅层压缩
 def microcompact(messages: list):
     tool_results = []
     for msg in messages:
@@ -17,7 +18,7 @@ def microcompact(messages: list):
                     tool_results.append(part)
     if len(tool_results) <= KEEP_RECENT:
         return
-    tool_name_map = {}
+    tool_name_map = {}#构建工具ID->工具名称的映射表
     for msg in messages:
         if msg["role"] == "assistant":
             content = msg.get("content", [])
@@ -33,7 +34,8 @@ def microcompact(messages: list):
         if tool_name in PRESERVE_RESULT_TOOLS:
             continue
         part["content"] = f"[较早的输出内容已折叠，使用了工具 {tool_name}]"
-
+        
+#深层压缩函数
 def auto_compact(messages: list, focus: str = None) -> list:
     TRANSCRIPT_DIR.mkdir(exist_ok=True)
     path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
