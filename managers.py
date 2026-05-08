@@ -255,6 +255,7 @@ class TeammateManager:
         self.config_path = TEAM_DIR / "config.json"
         self.config = self._load()
         self.threads = {}
+        self.plan_requests = {}
 
     def _load(self) -> dict:
         if self.config_path.exists():
@@ -303,6 +304,7 @@ class TeammateManager:
             {"name": "send_message", "description": "Send message.", "input_schema": {"type": "object", "properties": {"to": {"type": "string"}, "content": {"type": "string"}}, "required": ["to", "content"]}},
             {"name": "idle", "description": "Signal no more work.", "input_schema": {"type": "object", "properties": {}}},
             {"name": "claim_task", "description": "Claim task by ID.", "input_schema": {"type": "object", "properties": {"task_id": {"type": "integer"}}, "required": ["task_id"]}},
+            {"name": "submit_plan", "description": "Submit a working plan to the lead agent for approval.", "input_schema": {"type": "object", "properties": {"plan_details": {"type": "string"}}, "required": ["plan_details"]}},
         ]
         while True:
             for _ in range(50):
@@ -330,6 +332,16 @@ class TeammateManager:
                             output = self.task_mgr.claim(block.input["task_id"], name)
                         elif block.name == "send_message":
                             output = self.bus.send(name, block.input["to"], block.input["content"])
+                        elif block.name == "submit_plan":
+                            req_id = str(uuid.uuid4())[:8]
+                            self.plan_requests[req_id] = {
+                                "from": name, 
+                                "status": "pending", 
+                                "plan": block.input["plan_details"]
+                            }
+                            content = f"【计划审批请求 ID: {req_id}】\n{block.input['plan_details']}\n\n请使用 plan_approval 工具进行审批。"
+                            output = self.bus.send(name, "lead", content, "message", {"request_id": req_id})
+                            output += f" (Plan ID {req_id} submitted. Wait for the lead to approve.)"
                         else:
                             dispatch = {"bash": lambda **kw: run_bash(kw["command"]),
                                         "read_file": lambda **kw: run_read(kw["path"]),
