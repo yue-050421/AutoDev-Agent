@@ -23,7 +23,8 @@ TEAM = TeammateManager(BUS, TASK_MGR)
 SYSTEM = f"""You are a coding agent at {WORKDIR}. Use tools to solve tasks.
 Prefer task_create/task_update/task_list for multi-step work. Use TodoWrite for short checklists.
 Use task for subagent delegation. Use load_skill for specialized knowledge.
-Skills: {SKILLS.descriptions()}"""
+Skills: {SKILLS.descriptions()}
+Before sending a message to a teammate, use list_teammates to check their status. If their status is 'shutdown', you MUST use spawn_teammate to wake them up before expecting a reply."""
 
 # === 关机与计划审批 ===
 shutdown_requests = {}
