@@ -7,6 +7,7 @@ import time
 import uuid
 from pathlib import Path
 from queue import Queue
+from core_sandbox import SANDBOX
 
 from config import (
     client, MODEL, WORKDIR, TASKS_DIR, INBOX_DIR, TEAM_DIR,
@@ -188,8 +189,8 @@ class BackgroundManager:
 
     def _exec(self, tid: str, command: str, timeout: int):
         try:
-            r = subprocess.run(command, shell=True, cwd=WORKDIR, capture_output=True, text=True, timeout=timeout)
-            output = (r.stdout + r.stderr).strip()[:50000]
+            output = SANDBOX.execute_command(command, str(WORKDIR), tool_use_id=tid)
+            self.tasks[tid].update({"status": "completed", "result": output})
             self.tasks[tid].update({"status": "completed", "result": output or "(no output)"})
         except Exception as e:
             self.tasks[tid].update({"status": "error", "result": str(e)})
