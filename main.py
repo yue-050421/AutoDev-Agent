@@ -27,7 +27,6 @@ Skills: {SKILLS.descriptions()}"""
 
 # === 关机与计划审批 ===
 shutdown_requests = {}
-plan_requests = {}
 
 
 def handle_shutdown_request(teammate: str) -> str:
@@ -38,7 +37,7 @@ def handle_shutdown_request(teammate: str) -> str:
 
 
 def handle_plan_review(request_id: str, approve: bool, feedback: str = "") -> str:
-    req = plan_requests.get(request_id)
+    req = TEAM.plan_requests.get(request_id)
     if not req: return f"Error: Unknown plan request_id '{request_id}'"
     req["status"] = "approved" if approve else "rejected"
     BUS.send("lead", req["from"], feedback, "plan_approval_response",
@@ -279,6 +278,7 @@ def agent_loop(messages: list):
             print("[manual compact]")
             messages[:] = auto_compact(messages, focus=compact_focus)
 
+# === REPL 控制台 ===
 if __name__ == "__main__":
     history = []
     while True:
