@@ -116,7 +116,7 @@ class SkillLoader:
 class TaskManager:
     def __init__(self):
         TASKS_DIR.mkdir(exist_ok=True)
-
+        self.lock = threading.Lock()
     def _next_id(self) -> int:
         ids = [int(f.stem.split("_")[1]) for f in TASKS_DIR.glob("task_*.json")]
         return max(ids, default=0) + 1
@@ -168,40 +168,69 @@ class TaskManager:
         return "\n".join(lines)
 
     #加载指定任务
-    def claim(self, tid: int, owner: str) -> str:
-        task = self._load(tid)
-        task["owner"] = owner
-        task["status"] = "in_progress"
-        self._save(task)
-        return f"Claimed task #{tid} for {owner}"
-
+    def claim(self, task_id: str, agent_name: str) -> bool:
+        """
+        认领任务。如果成功返回 True，如果被别人抢先了返回 False。
+        """
+        task_file = TASKS_DIR / f"task_{task_id}.json"
+        
+        # 【新增】2. 获取锁。这会让其他试图抢单的 Agent 在这里乖乖排队
+        with self.lock: 
+            if not task_file.exists():
+                return False
+                
+            # --- 锁内的原子操作区 开始 ---
+            
+            # 1. 读文件
+            with open(task_file, "r", encoding="utf-8") as f:
+                task = json.load(f)
+                
+            # 【新增】3. Double-check (双重检查) 极其重要！
+            # 因为拿到锁的时候，文件可能刚刚被上一个释放锁的 Agent 改过了
+            if task.get("owner") is not None or task.get("status") != "pending":
+                # 哎呀，来晚了一步，被别人抢走了
+                return False 
+                
+            # 4. 修改状态
+            task["owner"] = agent_name
+            task["status"] = "working"
+            
+            # 5. 写回硬盘
+            with open(task_file, "w", encoding="utf-8") as f:
+                json.dump(task, f, ensure_ascii=False, indent=2)
+                
+            # --- 锁内的原子操作区 结束 ---
+            
+            return True # 抢单成功！
+        
 #异步执行长时间命令
 class BackgroundManager:
     def __init__(self):
         self.tasks = {}
         self.notifications = Queue()
 
+    #任务派发
     def run(self, command: str, timeout: int = 120) -> str:
         tid = str(uuid.uuid4())[:8]
         self.tasks[tid] = {"status": "running", "command": command, "result": None}
         threading.Thread(target=self._exec, args=(tid, command, timeout), daemon=True).start()
         return f"Background task {tid} started: {command[:80]}"
-
+    
+    #任务执行
     def _exec(self, tid: str, command: str, timeout: int):
         try:
             output = SANDBOX.execute_command(command, str(WORKDIR), tool_use_id=tid)
-            self.tasks[tid].update({"status": "completed", "result": output})
             self.tasks[tid].update({"status": "completed", "result": output or "(no output)"})
         except Exception as e:
             self.tasks[tid].update({"status": "error", "result": str(e)})
         self.notifications.put({"task_id": tid, "status": self.tasks[tid]["status"], "result": self.tasks[tid]["result"][:500]})
-
+    #大模型主动查询
     def check(self, tid: str = None) -> str:
         if tid:
             t = self.tasks.get(tid)
             return f"[{t['status']}] {t.get('result', '(running)')}" if t else f"Unknown: {tid}"
         return "\n".join(f"{k}: [{v['status']}] {v['command'][:60]}" for k, v in self.tasks.items()) or "No bg tasks."
-
+    #被动收割
     def drain(self) -> list:
         notifs = []
         while not self.notifications.empty():
@@ -374,14 +403,22 @@ class TeammateManager:
                         unclaimed.append(t)
                 if unclaimed:
                     task = unclaimed[0]
-                    self.task_mgr.claim(task["id"], name)
-                    if len(messages) <= 3:
-                        messages.insert(0, {"role": "user", "content": f"<identity>You are '{name}', role: {role}, team: {team_name}.</identity>"})
-                        messages.insert(1, {"role": "assistant", "content": f"I am {name}. Continuing."})
-                    messages.append({"role": "user", "content": f"<auto-claimed>Task #{task['id']}: {task['subject']}\n{task.get('description', '')}</auto-claimed>"})
-                    messages.append({"role": "assistant", "content": f"Claimed task #{task['id']}. Working on it."})
-                    resume = True
-                    break
+                    claim_success = self.task_mgr.claim(task["id"], name)
+                    
+                    if claim_success:
+                        # 抢单成功！开始重塑记忆并分配工作
+                        if len(messages) <= 3:
+                            messages.insert(0, {"role": "user", "content": f"<identity>You are '{name}', role: {role}, team: {team_name}.</identity>"})
+                            messages.insert(1, {"role": "assistant", "content": f"I am {name}. Continuing."})
+                        messages.append({"role": "user", "content": f"<auto-claimed>Task #{task['id']}: {task['subject']}\n{task.get('description', '')}</auto-claimed>"})
+                        messages.append({"role": "assistant", "content": f"Claimed task #{task['id']}. Working on it."})
+                        resume = True
+                        break # 跳出休眠，满血复活去干活
+                    else:
+                        # 【新增】抢单失败（被别人抢了）
+                        # 什么都不做，继续下一轮 while 循环，去寻找黑板上的下一个任务
+                        print(f"[{name}] 抢单慢了一步，Task #{task['id']} 已被抢走，继续寻找...")
+                        continue
             if not resume:
                 self._set_status(name, "shutdown")
                 return
