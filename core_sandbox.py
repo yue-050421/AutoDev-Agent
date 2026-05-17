@@ -107,6 +107,34 @@ class SandboxManager:
                     last_heartbeat REAL
                 )
             ''')
+            cursor = conn.cursor()
+            # 查出所有上一次没来得及正常销毁的沙箱记录
+            cursor.execute("SELECT id, pid FROM sandboxes WHERE status IN ('working', 'idle')")
+            stale_sandboxes = cursor.fetchall()
+
+            if stale_sandboxes:
+                print(f"\n[Sandbox Boot] 检测到 {len(stale_sandboxes)} 个上一次运行残留的孤儿沙箱，开始清理...")
+                
+                for sid, pid in stale_sandboxes:
+                    if pid:
+                        try:
+                            # 探测并强制杀死滞留在 OS 中的旧沙箱进程
+                            proc = psutil.Process(pid)
+                            proc.kill()
+                            print(f" -> 已强制熔断残留沙箱实例: {sid} (PID: {pid})")
+                        except psutil.NoSuchProcess:
+                            # 进程在断电或重启中已经死了，那正好
+                            pass
+                        except Exception as e:
+                            print(f" -> 清理沙箱 {sid} (PID: {pid}) 时发生异常: {e}")
+                
+                # 一键将数据库里这些“前世沙箱”的状态批量重置为异常/已销毁状态
+                conn.execute(
+                    "UPDATE sandboxes SET status = 'exception', last_heartbeat = ? WHERE status IN ('working', 'idle')",
+                    (time.time(),)
+                )
+                conn.commit()
+                print("[Sandbox Boot] 历史孤儿沙箱进程清理完毕，系统已恢复纯净环境。\n")
         finally:
             conn.close()
 
